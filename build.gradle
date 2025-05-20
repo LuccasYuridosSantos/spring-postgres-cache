@@ -1,0 +1,101 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.2.0'
+    id 'io.spring.dependency-management' version '1.1.4'
+    id 'com.google.cloud.tools.jib' version '3.4.0'
+}
+
+group = 'com.project'
+version = '1.0.0-SNAPSHOT'
+sourceCompatibility = '17'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Spring Boot
+    implementation 'org.springframework.boot:spring-boot-starter'
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    
+    // Liquibase
+    implementation 'org.liquibase:liquibase-core:4.25.0'
+    
+    // PostgreSQL
+    implementation 'org.postgresql:postgresql:42.7.1'
+    
+    // Jackson
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.16.0'
+    
+    // Lombok
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
+    
+    // Test
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// Configuração do Jib para gerar imagem Docker
+jib {
+    from {
+        image = 'eclipse-temurin:17-jre-alpine'
+    }
+    to {
+        image = 'project/pg-cache'
+        tags = [version]
+    }
+    container {
+        mainClass = 'com.project.pgcache.PgCacheApplication'
+        ports = ['8080']
+        environment = [
+            'SPRING_PROFILES_ACTIVE': 'prod'
+        ]
+    }
+}
+
+// Configuração para publicar no Maven Local
+bootJar {
+    enabled = true
+}
+
+jar {
+    enabled = true
+    archiveClassifier = ''
+}
+
+// Configuração para publicar no Maven Central
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            groupId = project.group
+            artifactId = project.name
+            version = project.version
+            
+            pom {
+                name = 'PG Cache'
+                description = 'PostgreSQL-based caching library for Spring Boot'
+                url = 'https://github.com/yourusername/pg-cache'
+                
+                licenses {
+                    license {
+                        name = 'MIT License'
+                        url = 'https://opensource.org/licenses/MIT'
+                    }
+                }
+                
+                developers {
+                    developer {
+                        id = 'yourusername'
+                        name = 'Your Name'
+                        email = 'your.email@example.com'
+                    }
+                }
+            }
+        }
+    }
+} 

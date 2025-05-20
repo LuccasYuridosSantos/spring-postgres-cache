@@ -1,0 +1,25 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001
+      author: pg-cache
+      changes:
+        - sql:
+            sql: |
+              -- Create cache table
+              CREATE ${useUnloggedTable ? 'UNLOGGED' : ''} TABLE IF NOT EXISTS ${tableName} (
+                key VARCHAR(255) PRIMARY KEY,
+                value JSONB NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP WITH TIME ZONE
+              );
+
+              -- Optimize table for better performance
+              ALTER TABLE ${tableName} SET (autovacuum_vacuum_scale_factor = 0.1);
+              ALTER TABLE ${tableName} SET (autovacuum_analyze_scale_factor = 0.05);
+              ALTER TABLE ${tableName} SET (autovacuum_vacuum_threshold = 50);
+              ALTER TABLE ${tableName} SET (autovacuum_analyze_threshold = 50);
+
+              -- Create indexes if enabled
+              ${createIndexes ? 'CREATE INDEX IF NOT EXISTS idx_' + tableName + '_expires_at ON ' + tableName + ' (expires_at);' : ''}
+              ${createIndexes ? 'CREATE INDEX IF NOT EXISTS idx_' + tableName + '_created_at ON ' + tableName + ' (created_at);' : ''}
+              ${createIndexes ? 'CREATE INDEX IF NOT EXISTS idx_' + tableName + '_value_gin ON ' + tableName + ' USING GIN (value);' : ''} 

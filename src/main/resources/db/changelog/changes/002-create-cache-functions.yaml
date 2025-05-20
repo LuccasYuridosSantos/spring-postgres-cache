@@ -1,0 +1,91 @@
+databaseChangeLog:
+  - changeSet:
+      id: 002
+      author: pg-cache
+      changes:
+        - sql:
+            sql: |
+              -- Function to insert or update a value in the cache
+              CREATE OR REPLACE FUNCTION pg_cache_set(
+                p_key VARCHAR(255),
+                p_value JSONB,
+                p_ttl_seconds INTEGER DEFAULT NULL
+              ) RETURNS VOID AS $$
+              BEGIN
+                INSERT INTO ${tableName} (key, value, expires_at)
+                VALUES (
+                  p_key,
+                  p_value,
+                  CASE 
+                    WHEN p_ttl_seconds IS NOT NULL THEN CURRENT_TIMESTAMP + (p_ttl_seconds || ' seconds')::INTERVAL
+                    ELSE NULL
+                  END
+                )
+                ON CONFLICT (key) DO UPDATE SET
+                  value = EXCLUDED.value,
+                  expires_at = EXCLUDED.expires_at;
+              END;
+              $$ LANGUAGE plpgsql;
+
+              -- Function to retrieve a value from the cache with plan caching
+              CREATE OR REPLACE FUNCTION pg_cache_get(p_key VARCHAR(255))
+              RETURNS JSONB AS $$
+              DECLARE
+                v_value JSONB;
+              BEGIN
+                SELECT value INTO v_value
+                FROM ${tableName}
+                WHERE key = p_key
+                  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP);
+                
+                RETURN v_value;
+              END;
+              $$ LANGUAGE plpgsql;
+
+              -- Function to delete a value from the cache
+              CREATE OR REPLACE FUNCTION pg_cache_delete(p_key VARCHAR(255))
+              RETURNS BOOLEAN AS $$
+              DECLARE
+                v_deleted BOOLEAN;
+              BEGIN
+                DELETE FROM ${tableName}
+                WHERE key = p_key
+                RETURNING TRUE INTO v_deleted;
+                
+                RETURN COALESCE(v_deleted, FALSE);
+              END;
+              $$ LANGUAGE plpgsql;
+
+              -- Function to clean up expired entries
+              CREATE OR REPLACE FUNCTION pg_cache_cleanup()
+              RETURNS INTEGER AS $$
+              DECLARE
+                v_deleted INTEGER;
+              BEGIN
+                DELETE FROM ${tableName}
+                WHERE expires_at IS NOT NULL
+                  AND expires_at <= CURRENT_TIMESTAMP
+                RETURNING COUNT(*) INTO v_deleted;
+                
+                RETURN v_deleted;
+              END;
+              $$ LANGUAGE plpgsql;
+
+              -- Function to get cache statistics
+              CREATE OR REPLACE FUNCTION pg_cache_stats()
+              RETURNS TABLE (
+                total_entries BIGINT,
+                expired_entries BIGINT,
+                active_entries BIGINT,
+                avg_ttl_seconds NUMERIC
+              ) AS $$
+              BEGIN
+                RETURN QUERY
+                SELECT
+                  COUNT(*)::BIGINT as total_entries,
+                  COUNT(*) FILTER (WHERE expires_at <= CURRENT_TIMESTAMP)::BIGINT as expired_entries,
+                  COUNT(*) FILTER (WHERE expires_at > CURRENT_TIMESTAMP OR expires_at IS NULL)::BIGINT as active_entries,
+                  AVG(EXTRACT(EPOCH FROM (expires_at - created_at)))::NUMERIC as avg_ttl_seconds
+                FROM ${tableName};
+              END;
+              $$ LANGUAGE plpgsql; 

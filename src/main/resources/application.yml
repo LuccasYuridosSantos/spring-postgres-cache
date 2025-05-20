@@ -1,0 +1,20 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/mydb
+    username: myuser
+    password: mypassword
+    driver-class-name: org.postgresql.Driver
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+pg-cache:
+  enabled: true
+  table-name: pg_cache
+  schema: public
+  default-ttl-seconds: 3600
+  create-indexes: true
+  use-unlogged-table: true
+
+logging:
+  level:
+    com.project.pgcache: DEBUG 

@@ -1,0 +1,14 @@
+databaseChangeLog:
+  - property:
+      name: tableName
+      value: ${tableName}
+  - property:
+      name: createIndexes
+      value: ${createIndexes}
+  - property:
+      name: useUnloggedTable
+      value: ${useUnloggedTable}
+  - include:
+      file: db/changelog/changes/001-create-cache-table.yaml
+  - include:
+      file: db/changelog/changes/002-create-cache-functions.yaml 

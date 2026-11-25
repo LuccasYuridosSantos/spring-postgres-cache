@@ -117,10 +117,17 @@ CREATE INDEX IF NOT EXISTS idx_pg_cache_value_gin ON pg_cache USING GIN (value);
 The build uses a Java 25 toolchain; Gradle downloads it automatically if it is not installed.
 
 ```bash
-./gradlew build                 # compile, test and package
-./gradlew test                  # integration tests need Docker (Testcontainers); skipped otherwise
+./gradlew build                 # compile, test, check coverage and package
+./gradlew test                  # runs the tests and writes the JaCoCo coverage report
 ./gradlew publishToMavenLocal
 ```
+
+Integration tests run against a real PostgreSQL through Testcontainers, so Docker must be running.
+Without Docker they are skipped, and the coverage check below then fails.
+
+**Code coverage:** the library is held at **100% line, branch and instruction coverage** (JaCoCo).
+`./gradlew check` (and therefore `build`) fails if coverage drops below that. The HTML report is written to
+`build/reports/jacoco/test/html/index.html`.
 
 ## 🐳 Running the Example App (Docker Compose)
 

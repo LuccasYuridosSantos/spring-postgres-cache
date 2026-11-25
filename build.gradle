@@ -3,6 +3,7 @@ import org.springframework.boot.gradle.plugin.SpringBootPlugin
 plugins {
     id 'java-library'
     id 'maven-publish'
+    id 'jacoco'
     id 'org.springframework.boot' version '4.1.2' apply false
     id 'io.spring.dependency-management' version '1.1.7'
 }
@@ -62,6 +63,45 @@ tasks.named('javadoc') {
 
 tasks.named('test') {
     useJUnitPlatform()
+    finalizedBy 'jacocoTestReport'
+}
+
+// Code coverage (library only; example-app is validated end-to-end via docker compose)
+jacoco {
+    toolVersion = '0.8.14' // first release with official Java 25 support
+}
+
+tasks.named('jacocoTestReport') {
+    dependsOn 'test'
+    reports {
+        xml.required = true   // for CI / coverage services
+        html.required = true  // build/reports/jacoco/test/html/index.html
+    }
+}
+
+tasks.named('jacocoTestCoverageVerification') {
+    dependsOn 'test'
+    violationRules {
+        rule {
+            limit {
+                counter = 'LINE'
+                minimum = 1.0
+            }
+            limit {
+                counter = 'BRANCH'
+                minimum = 1.0
+            }
+            limit {
+                counter = 'INSTRUCTION'
+                minimum = 1.0
+            }
+        }
+    }
+}
+
+// `./gradlew check` / `build` fail if coverage drops below 100%
+tasks.named('check') {
+    dependsOn 'jacocoTestCoverageVerification'
 }
 
 publishing {

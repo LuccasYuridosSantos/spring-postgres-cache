@@ -1,0 +1,156 @@
+{
+  "uid": "pg-cache",
+  "title": "PG Cache - Example App",
+  "tags": ["pg-cache", "spring-boot"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Hit ratio (1m)",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 1, "min": 0, "max": 1,
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "red", "value": null }, { "color": "orange", "value": 0.5 }, { "color": "green", "value": 0.8 } ] } } },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "sum(rate(pgcache_example_lookups_total{result=\"hit\"}[1m])) / sum(rate(pgcache_example_lookups_total[1m]))" } ]
+    },
+    {
+      "id": 2, "type": "stat", "title": "Lookups / s",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 2 } },
+      "options": { "colorMode": "none", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "sum(rate(pgcache_example_lookups_total[1m]))" } ]
+    },
+    {
+      "id": 3, "type": "stat", "title": "Active entries",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "colorMode": "none", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "sum(pgcache_entries{state=\"active\"})" } ]
+    },
+    {
+      "id": 4, "type": "stat", "title": "Expired (awaiting cleanup)",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "colorMode": "none", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "sum(pgcache_entries{state=\"expired\"})" } ]
+    },
+    {
+      "id": 5, "type": "stat", "title": "p95 lookup - cache",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3 } },
+      "options": { "colorMode": "none", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(pgcache_example_lookup_seconds_bucket{source=\"cache\"}[1m])))" } ]
+    },
+    {
+      "id": 6, "type": "stat", "title": "p95 lookup - database",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3 } },
+      "options": { "colorMode": "none", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(pgcache_example_lookup_seconds_bucket{source=\"database\"}[1m])))" } ]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Lookups / s by result",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 15 } } },
+      "targets": [ { "refId": "A", "expr": "sum by (result) (rate(pgcache_example_lookups_total[1m]))", "legendFormat": "{{result}}" } ]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Lookup latency p95 by source",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "scaleDistribution": { "type": "log", "log": 10 } } } },
+      "targets": [ { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, source) (rate(pgcache_example_lookup_seconds_bucket[1m])))", "legendFormat": "{{source}}" } ]
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "pg_cache table entries",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } } },
+      "targets": [ { "refId": "A", "expr": "sum by (state) (pgcache_entries)", "legendFormat": "{{state}}" } ]
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "HTTP requests / s",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "targets": [ { "refId": "A", "expr": "sum by (method, uri, status) (rate(http_server_requests_seconds_count{uri!~\"/actuator.*\"}[1m]))", "legendFormat": "{{method}} {{uri}} {{status}}" } ]
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "DB connection pool (Hikari)",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        { "refId": "A", "expr": "sum(hikaricp_connections_active)", "legendFormat": "active" },
+        { "refId": "B", "expr": "sum(hikaricp_connections_idle)", "legendFormat": "idle" },
+        { "refId": "C", "expr": "sum(hikaricp_connections_pending)", "legendFormat": "pending" }
+      ]
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "JVM heap used",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [ { "refId": "A", "expr": "sum(jvm_memory_used_bytes{area=\"heap\"})", "legendFormat": "heap used" } ]
+    },
+    {
+      "id": 13, "type": "row", "title": "Logs (Loki)", "collapsed": false,
+      "gridPos": { "x": 0, "y": 28, "w": 24, "h": 1 }, "panels": []
+    },
+    {
+      "id": 14, "type": "timeseries", "title": "App log lines by level",
+      "gridPos": { "x": 0, "y": 29, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 60, "stacking": { "mode": "normal" } } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "ERROR" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byName", "options": "WARN" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] },
+          { "matcher": { "id": "byName", "options": "INFO" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] },
+          { "matcher": { "id": "byName", "options": "DEBUG" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ] }
+        ]
+      },
+      "targets": [ { "refId": "A", "expr": "sum by (level) (count_over_time({service_name=\"app\"} [$__interval]))", "legendFormat": "{{level}}" } ]
+    },
+    {
+      "id": 15, "type": "timeseries", "title": "Cache HIT / MISS (from logs)",
+      "description": "Same information as the metrics above, extracted from the log lines: a cross-check that logs and metrics agree.",
+      "gridPos": { "x": 12, "y": 29, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 15 } } },
+      "targets": [ { "refId": "A", "expr": "sum by (result) (count_over_time({service_name=\"app\"} |~ \"Cache (HIT|MISS)\" | regexp \"Cache (?P<result>HIT|MISS)\" [$__interval]))", "legendFormat": "{{result}}" } ]
+    },
+    {
+      "id": 16, "type": "logs", "title": "Warnings and errors (app + postgres)",
+      "gridPos": { "x": 0, "y": 37, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "showLabels": true },
+      "targets": [ { "refId": "A", "expr": "{service_name=~\"app|postgres\", level=~\"WARN|ERROR|WARNING|FATAL|PANIC\"}" } ]
+    },
+    {
+      "id": 17, "type": "logs", "title": "App logs",
+      "gridPos": { "x": 0, "y": 45, "w": 24, "h": 12 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" },
+      "targets": [ { "refId": "A", "expr": "{service_name=\"app\"}" } ]
+    },
+    {
+      "id": 18, "type": "logs", "title": "PostgreSQL logs",
+      "gridPos": { "x": 0, "y": 57, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true },
+      "targets": [ { "refId": "A", "expr": "{service_name=\"postgres\"}" } ]
+    }
+  ]
+}

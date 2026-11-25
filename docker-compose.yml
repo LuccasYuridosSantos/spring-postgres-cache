@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: pgcache
+      POSTGRES_USER: pgcache
+      POSTGRES_PASSWORD: pgcache
+    labels:
+      logs: loki # collected by Alloy
+    # No host port: the database is only reachable from the compose network
+    # (use `docker compose exec postgres psql -U pgcache` to inspect it)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pgcache -d pgcache"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: example-app/Dockerfile
+    labels:
+      logs: loki # collected by Alloy
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/pgcache
+      DB_USER: pgcache
+      DB_PASSWORD: pgcache
+      PG_CACHE_DEFAULT_TTL: 30s
+      PG_CACHE_CLEANUP_INTERVAL: 20s
+      SPRING_MAIN_BANNER_MODE: "off" # keeps the ASCII banner out of Loki
+    ports:
+      - "8080:8080"
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    depends_on:
+      - app
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  loki:
+    image: grafana/loki:3.5.0
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+
+  alloy:
+    image: grafana/alloy:v1.10.0
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    depends_on:
+      - loki
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "12345:12345" # Alloy UI (pipeline debugging)
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    depends_on:
+      - prometheus
+      - loki
+    environment:
+      # Local-only setup: open the dashboards without a login
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/pg-cache.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:

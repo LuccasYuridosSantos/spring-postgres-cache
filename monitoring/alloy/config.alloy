@@ -1,0 +1,85 @@
+// Collects the logs of the compose containers labelled `logs: loki`
+// straight from the Docker socket and ships them to Loki.
+
+discovery.docker "compose" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+
+  filter {
+    name   = "label"
+    values = ["logs=loki"]
+  }
+}
+
+discovery.relabel "compose" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service_name"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+}
+
+loki.source.docker "compose" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.compose.targets
+  relabel_rules = discovery.relabel.compose.rules
+  forward_to    = [loki.process.compose.receiver]
+}
+
+loki.process "compose" {
+  // Spring Boot: 2026-11-25T18:08:11.820Z  INFO 1 --- [app] [thread] logger : message
+  stage.match {
+    selector = "{service_name=\"app\"}"
+
+    // Keep stack traces together with the line that logged them
+    stage.multiline {
+      firstline     = "^\\d{4}-\\d{2}-\\d{2}T"
+      max_wait_time = "3s"
+    }
+
+    stage.regex {
+      expression = "^\\S+\\s+(?P<level>TRACE|DEBUG|INFO|WARN|ERROR)\\s+\\d+\\s+---\\s+\\[[^\\]]*\\]\\s+\\[\\s*(?P<thread>[^\\]]*?)\\]\\s+(?P<logger>\\S+)"
+    }
+
+    stage.labels {
+      values = { level = "" }
+    }
+
+    stage.structured_metadata {
+      values = { logger = "", thread = "" }
+    }
+  }
+
+  // PostgreSQL: 2026-11-25 18:08:05.123 UTC [1] LOG:  message
+  stage.match {
+    selector = "{service_name=\"postgres\"}"
+
+    stage.regex {
+      expression = "^\\S+ \\S+ \\S+ \\[\\d+\\] (?P<level>[A-Z]+):"
+    }
+
+    stage.labels {
+      values = { level = "" }
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

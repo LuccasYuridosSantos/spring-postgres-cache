@@ -3,3 +3,6 @@ plugins {
 }
 
 rootProject.name = 'pg-cache'
+
+// Sample Spring Boot application used to try the library end-to-end (see docker-compose.yml)
+include 'example-app'

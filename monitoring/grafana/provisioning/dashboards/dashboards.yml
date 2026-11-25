@@ -1,0 +1,9 @@
+apiVersion: 1
+
+providers:
+  - name: pg-cache
+    folder: PG Cache
+    type: file
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

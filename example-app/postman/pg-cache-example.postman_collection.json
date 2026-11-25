@@ -1,0 +1,494 @@
+{
+  "info": {
+    "name": "PG Cache - Example App",
+    "description": "End-to-end tests for the pg-cache example app running in docker compose.\n\nStart the stack with `docker compose up -d --build`, then run the whole collection with the Collection Runner (keep the order: requests depend on each other).\n\nLinks:\n- App: http://localhost:8080\n- Grafana: http://localhost:3000\n- Prometheus: http://localhost:9090",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "prometheusUrl", "value": "http://localhost:9090" },
+    { "key": "grafanaUrl", "value": "http://localhost:3000" },
+    { "key": "lokiUrl", "value": "http://localhost:3100" },
+    { "key": "productId", "value": "42" },
+    { "key": "cacheKey", "value": "user:1" }
+  ],
+  "item": [
+    {
+      "name": "0. Health",
+      "item": [
+        {
+          "name": "Actuator health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('app is UP', () => pm.expect(body.status).to.eql('UP'));",
+                  "pm.test('PostgreSQL is UP', () => {",
+                  "    pm.expect(body.components.db.status).to.eql('UP');",
+                  "    pm.expect(body.components.db.details.database).to.eql('PostgreSQL');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/actuator/health" }
+        }
+      ]
+    },
+    {
+      "name": "1. Products (cache-aside)",
+      "description": "The source is deliberately slow (2s). The first call is a miss, the second one is served from pg_cache.",
+      "item": [
+        {
+          "name": "Get product - 1st call (MISS, ~2s)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// New id per run so the first call is always a miss",
+                  "pm.collectionVariables.set('productId', 'p' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('served by the slow source', () => pm.expect(body.source).to.eql('database'));",
+                  "pm.test('took ~2s', () => pm.expect(body.elapsedMs).to.be.at.least(2000));",
+                  "pm.test('product id matches', () => pm.expect(body.product.id).to.eql(pm.collectionVariables.get('productId')));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/products/{{productId}}" }
+        },
+        {
+          "name": "Get product - 2nd call (HIT, fast)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('served by pg_cache', () => pm.expect(body.source).to.eql('cache'));",
+                  "pm.test('fast (< 200ms)', () => pm.expect(body.elapsedMs).to.be.below(200));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/products/{{productId}}" }
+        },
+        {
+          "name": "Evict product",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('status 204', () => pm.response.to.have.status(204));"]
+              }
+            }
+          ],
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/products/{{productId}}" }
+        },
+        {
+          "name": "Get product after evict (MISS again)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('back to the slow source', () => pm.expect(pm.response.json().source).to.eql('database'));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/products/{{productId}}" }
+        },
+        {
+          "name": "Evict missing product (404)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "type": "text/javascript", "exec": ["pm.variables.set('missingId', 'missing-' + Date.now());"] }
+            },
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('status 404', () => pm.response.to.have.status(404));"] }
+            }
+          ],
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/products/{{missingId}}" }
+        }
+      ]
+    },
+    {
+      "name": "2. Cache API (set / get / overwrite / delete)",
+      "item": [
+        {
+          "name": "Set value (no expiry)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('status 204', () => pm.response.to.have.status(204));"] }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Ana\",\n  \"age\": 30,\n  \"roles\": [\"admin\", \"user\"]\n}" },
+            "url": { "raw": "{{baseUrl}}/cache/{{cacheKey}}?ttl=never", "host": ["{{baseUrl}}"], "path": ["cache", "{{cacheKey}}"],
+              "query": [{ "key": "ttl", "value": "never", "description": "never | 10s | 5m | PT1H | omit to use pg-cache.default-ttl (30s)" }] }
+          }
+        },
+        {
+          "name": "Get value",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('JSON round-trips', () => {",
+                  "    pm.expect(body.name).to.eql('Ana');",
+                  "    pm.expect(body.age).to.eql(30);",
+                  "    pm.expect(body.roles).to.eql(['admin', 'user']);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/cache/{{cacheKey}}" }
+        },
+        {
+          "name": "Overwrite value",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('status 204', () => pm.response.to.have.status(204));"] }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Bia\",\n  \"age\": 31\n}" },
+            "url": { "raw": "{{baseUrl}}/cache/{{cacheKey}}?ttl=5m", "host": ["{{baseUrl}}"], "path": ["cache", "{{cacheKey}}"], "query": [{ "key": "ttl", "value": "5m" }] }
+          }
+        },
+        {
+          "name": "Get overwritten value",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('new value returned', () => pm.expect(pm.response.json().name).to.eql('Bia'));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/cache/{{cacheKey}}" }
+        },
+        {
+          "name": "Delete value",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('status 204', () => pm.response.to.have.status(204));"] }
+            }
+          ],
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/cache/{{cacheKey}}" }
+        },
+        {
+          "name": "Get deleted value (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('status 404', () => pm.response.to.have.status(404));"] }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/cache/{{cacheKey}}" }
+        }
+      ]
+    },
+    {
+      "name": "3. Expiration (TTL) and cleanup",
+      "item": [
+        {
+          "name": "Set value with TTL 2s",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('status 204', () => pm.response.to.have.status(204));"] }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "\"temporary value\"" },
+            "url": { "raw": "{{baseUrl}}/cache/temp:ttl?ttl=2s", "host": ["{{baseUrl}}"], "path": ["cache", "temp:ttl"], "query": [{ "key": "ttl", "value": "2s" }] }
+          }
+        },
+        {
+          "name": "Get before expiry (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('value returned', () => pm.expect(pm.response.json()).to.eql('temporary value'));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/cache/temp:ttl" }
+        },
+        {
+          "name": "Get after expiry (waits 3s, 404)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "type": "text/javascript", "exec": ["// Wait for the 2s TTL to pass", "setTimeout(() => {}, 3000);"] }
+            },
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('expired entry is hidden (404)', () => pm.response.to.have.status(404));"] }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/cache/temp:ttl" }
+        },
+        {
+          "name": "Stats",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const s = pm.response.json();",
+                  "pm.test('has stats fields', () => pm.expect(s).to.have.all.keys('totalEntries', 'expiredEntries', 'activeEntries', 'avgTtlSeconds'));",
+                  "pm.test('total = active + expired', () => pm.expect(s.totalEntries).to.eql(s.activeEntries + s.expiredEntries));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/cache/stats" }
+        },
+        {
+          "name": "Cleanup expired entries",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('returns removed count', () => pm.expect(pm.response.json().removed).to.be.a('number').and.at.least(0));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "POST", "url": "{{baseUrl}}/cache/cleanup" }
+        },
+        {
+          "name": "Stats after cleanup (0 expired)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no expired entries left', () => pm.expect(pm.response.json().expiredEntries).to.eql(0));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/cache/stats" }
+        }
+      ]
+    },
+    {
+      "name": "4. Monitoring",
+      "item": [
+        {
+          "name": "App metrics (Prometheus format)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const text = pm.response.text();",
+                  "pm.test('exposes cache metrics', () => {",
+                  "    pm.expect(text).to.include('pgcache_example_lookups_total');",
+                  "    pm.expect(text).to.include('pgcache_entries');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/actuator/prometheus" }
+        },
+        {
+          "name": "Prometheus - scrape target is up",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const targets = pm.response.json().data.activeTargets;",
+                  "pm.test('app target is up', () => pm.expect(targets.some(t => t.labels.job === 'pg-cache-example' && t.health === 'up')).to.be.true);"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{prometheusUrl}}/api/v1/targets" }
+        },
+        {
+          "name": "Prometheus - hit/miss totals",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('query succeeded', () => pm.expect(body.status).to.eql('success'));",
+                  "body.data.result.forEach(r => console.log(r.metric.result, r.value[1]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{prometheusUrl}}/api/v1/query?query=sum by (result) (pgcache_example_lookups_total)", "host": ["{{prometheusUrl}}"], "path": ["api", "v1", "query"],
+              "query": [{ "key": "query", "value": "sum by (result) (pgcache_example_lookups_total)" }] }
+          }
+        },
+        {
+          "name": "Grafana - health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('database ok', () => pm.expect(pm.response.json().database).to.eql('ok'));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{grafanaUrl}}/api/health" }
+        },
+        {
+          "name": "Grafana - PG Cache dashboard is provisioned",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('dashboard title', () => pm.expect(pm.response.json().dashboard.title).to.eql('PG Cache - Example App'));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{grafanaUrl}}/api/dashboards/uid/pg-cache" }
+        },
+        {
+          "name": "Loki - ready",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('status 200', () => pm.response.to.have.status(200));"] }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{lokiUrl}}/ready" }
+        },
+        {
+          "name": "Loki - cache HIT/MISS log lines (last 15m)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('query succeeded', () => pm.expect(body.status).to.eql('success'));",
+                  "pm.test('app logs reached Loki', () => pm.expect(body.data.result.length).to.be.above(0));",
+                  "body.data.result.forEach(r => console.log(r.metric.result, r.value[1]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{lokiUrl}}/loki/api/v1/query?query=sum by (result) (count_over_time({service_name=\"app\"} |~ \"Cache (HIT|MISS)\" | regexp \"Cache (?P<result>HIT|MISS)\" [15m]))",
+              "host": ["{{lokiUrl}}"], "path": ["loki", "api", "v1", "query"],
+              "query": [{ "key": "query", "value": "sum by (result) (count_over_time({service_name=\"app\"} |~ \"Cache (HIT|MISS)\" | regexp \"Cache (?P<result>HIT|MISS)\" [15m]))" }]
+            }
+          }
+        },
+        {
+          "name": "Loki - app errors (last 1h)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const result = pm.response.json().data.result;",
+                  "const lines = result.flatMap(r => r.values.map(v => v[1].split('\\n')[0]));",
+                  "console.log(lines.length + ' error entries');",
+                  "lines.forEach(l => console.log(l));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{lokiUrl}}/loki/api/v1/query_range?query={service_name=\"app\", level=\"ERROR\"}&since=1h&limit=20",
+              "host": ["{{lokiUrl}}"], "path": ["loki", "api", "v1", "query_range"],
+              "query": [
+                { "key": "query", "value": "{service_name=\"app\", level=\"ERROR\"}" },
+                { "key": "since", "value": "1h" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

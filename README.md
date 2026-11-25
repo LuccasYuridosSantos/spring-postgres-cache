@@ -122,6 +122,95 @@ The build uses a Java 25 toolchain; Gradle downloads it automatically if it is n
 ./gradlew publishToMavenLocal
 ```
 
+## 🐳 Running the Example App (Docker Compose)
+
+The repository ships a sample Spring Boot app (`example-app/`) that uses the library, plus a local
+observability stack. Everything runs on your machine; no cloud account or API key is needed.
+
+Requirements: Docker with Docker Compose v2. Java is not needed on the host: the app is built inside Docker.
+
+```bash
+docker compose up -d --build     # build the app image and start all services
+docker compose ps                # all services should be "Up" (postgres "healthy")
+```
+
+| Service | URL | Purpose |
+| --- | --- | --- |
+| `app` | http://localhost:8080 | Example app (`/actuator/health`, `/actuator/prometheus`) |
+| `postgres` | *(internal only)* | PostgreSQL 17 holding the `pg_cache` table |
+| `grafana` | http://localhost:3000/d/pg-cache | Dashboard with cache metrics and logs (no login) |
+| `prometheus` | http://localhost:9090 | Metrics scraped from the app every 5s |
+| `loki` | http://localhost:3100 | Log storage |
+| `alloy` | http://localhost:12345 | Collects container logs and ships them to Loki |
+
+PostgreSQL has no port published on the host, so it never clashes with a local database.
+To inspect the cache table:
+
+```bash
+docker compose exec postgres psql -U pgcache -c "SELECT key, value, expires_at FROM pg_cache;"
+```
+
+### Example endpoints
+
+The product lookup is deliberately slow (2s) so cache hits are easy to spot:
+
+```bash
+curl localhost:8080/products/42        # 1st call: "source":"database", ~2000 ms
+curl localhost:8080/products/42        # 2nd call: "source":"cache", a few ms
+curl -X DELETE localhost:8080/products/42
+```
+
+Direct cache access (`ttl` accepts `10s`, `5m`, `PT1H`, `never`, or can be omitted to use `pg-cache.default-ttl`):
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `PUT` | `/cache/{key}?ttl=10s` | Store any JSON body |
+| `GET` | `/cache/{key}` | Read a value (404 if missing or expired) |
+| `DELETE` | `/cache/{key}` | Delete a value |
+| `GET` | `/cache/stats` | Total / active / expired entries and average TTL |
+| `POST` | `/cache/cleanup` | Remove expired entries now |
+
+```bash
+curl -X PUT -H 'Content-Type: application/json' -d '{"name":"Ana"}' "localhost:8080/cache/user:1?ttl=30s"
+curl localhost:8080/cache/user:1
+```
+
+The compose file sets `pg-cache.default-ttl=30s` and `pg-cache.cleanup-interval=20s` so expiry and
+background cleanup can be observed quickly (see the `app` environment in `docker-compose.yml`).
+
+### Validating the setup
+
+```bash
+bash example-app/validate.sh     # end-to-end checks: cache-aside, JSONB storage, TTL, cleanup, restart
+bash example-app/load.sh 120 4   # generate traffic for 120s with 4 workers to feed the dashboard
+```
+
+A Postman collection covering the cache API, metrics (Prometheus) and logs (Loki) is available at
+`example-app/postman/pg-cache-example.postman_collection.json`. Import it in Postman and run it with
+the Collection Runner, or from the command line:
+
+```bash
+npx -y newman@6 run example-app/postman/pg-cache-example.postman_collection.json
+```
+
+### Metrics and logs
+
+- **Metrics** (exposed by the example app, not by the library itself): `pgcache_example_lookups_total{result="hit|miss"}`,
+  `pgcache_example_lookup_seconds{source="cache|database"}`, `pgcache_entries{state="active|expired"}`,
+  `pgcache_avg_ttl_seconds`, plus the standard JVM, HTTP and HikariCP metrics.
+- **Logs**: Alloy collects the logs of containers labelled `logs: loki` (`app` and `postgres`) from the Docker socket,
+  extracts the `level` label and keeps stack traces as a single entry. Query them in Grafana → Explore, e.g.
+  `{service_name="app", level="ERROR"}`.
+
+Grafana runs with anonymous admin access to keep local use simple; do not reuse this configuration anywhere exposed.
+
+### Stopping
+
+```bash
+docker compose down        # stop and remove containers (data volume is kept)
+docker compose down -v     # also remove the PostgreSQL volume
+```
+
 ## 🗺️ Roadmap
 
 - [ ] Local in-memory (Caffeine) cache in front of PostgreSQL

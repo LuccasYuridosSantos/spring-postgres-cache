@@ -1,31 +1,28 @@
-# PG Cache: A High-Performance PostgreSQL-Based Caching Library for Spring Boot
+# PG Cache: A PostgreSQL-Based Caching Library for Spring Boot
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Java](https://img.shields.io/badge/Java-17-orange.svg)](https://www.oracle.com/java/technologies/javase/jdk17-archive-downloads.html)
-[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2-green.svg)](https://spring.io/projects/spring-boot)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-blue.svg)](https://www.postgresql.org/)
-[![Gradle](https://img.shields.io/badge/Gradle-8.5-green.svg)](https://gradle.org/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Java](https://img.shields.io/badge/Java-25-orange.svg)](https://openjdk.org/projects/jdk/25/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-green.svg)](https://spring.io/projects/spring-boot)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-blue.svg)](https://www.postgresql.org/)
+[![Gradle](https://img.shields.io/badge/Gradle-9.8-green.svg)](https://gradle.org/)
 
-PG Cache is a **high-performance, persistent caching solution** for Spring Boot applications using **PostgreSQL UNLOGGED tables**.
-It provides **Redis-like expiration**, **automatic cleanup**, and **local caching** with Caffeine for **maximum performance**.
+PG Cache is a **persistent caching solution** for Spring Boot applications backed by **PostgreSQL UNLOGGED tables**.
+It provides **Redis-like expiration** and **automatic cleanup** without running a separate cache server.
 
 ## 🚀 Features
 
-✅ **Spring Boot Starter** – Easy integration via `@EnablePgCache`.
-✅ **Local Caffeine Cache** – Reduces database queries.
-✅ **PostgreSQL Expiry Support** – Data expires automatically like Redis.
-✅ **Compact JSON Storage** – Uses JSONB for efficient storage.
-✅ **Cluster-Ready** – Works with PostgreSQL distributed systems (Citus).
-✅ **High Performance** – Optimized for low-latency lookups.
-✅ **Docker Support** – Easy deployment with Docker images.
-✅ **Configurable Table and Index** – Flexible configuration for optimal performance.
-✅ **Real-time Cache Statistics** – Provides insights into cache usage.
+✅ **Spring Boot auto-configuration** – add the dependency and inject `PgCache`.
+✅ **Redis-like expiry** – expired entries are never returned and are removed periodically.
+✅ **JSONB storage** – values are serialized with Spring Boot's Jackson `JsonMapper`.
+✅ **UNLOGGED table** – fast writes (configurable).
+✅ **Configurable schema, table and indexes**.
+✅ **Cache statistics**.
 
 ## 📦 Installation
 
-### Using Gradle
+Requirements: Java 25+, Spring Boot 4.1+, PostgreSQL 13+.
 
-Add the dependency to your `build.gradle`:
+### Gradle
 
 ```groovy
 dependencies {
@@ -33,9 +30,7 @@ dependencies {
 }
 ```
 
-### Using Maven
-
-Add the dependency to your `pom.xml`:
+### Maven
 
 ```xml
 <dependency>
@@ -47,7 +42,7 @@ Add the dependency to your `pom.xml`:
 
 ## ⚙️ Configuration
 
-Add the following properties to your `application.yml`:
+PG Cache uses your application's `DataSource`/`JdbcTemplate`. All `pg-cache.*` properties are optional:
 
 ```yaml
 spring:
@@ -55,23 +50,19 @@ spring:
     url: jdbc:postgresql://localhost:5432/mydb
     username: myuser
     password: mypassword
-  liquibase:
-    change-log: classpath:db/changelog/db.changelog-master.yaml
 
 pg-cache:
-  enabled: true
-  table-name: pg_cache
+  enabled: true              # set to false to disable the auto-configuration
   schema: public
-  default-ttl-seconds: 3600
+  table-name: pg_cache
+  default-ttl: 1h            # TTL used by set(key, value)
+  initialize-schema: true    # create table/indexes on startup if missing
   create-indexes: true
   use-unlogged-table: true
+  cleanup-interval: 5m       # 0 disables the background cleanup
 ```
 
 ## 🛠️ How to Use
-
-### Basic Usage
-
-Inject `PgCache` into your service and use it:
 
 ```java
 @Service
@@ -82,7 +73,7 @@ public class UserService {
     public User getUser(String id) {
         return cache.get("user:" + id, User.class)
             .orElseGet(() -> {
-                User user = // ... buscar usuário do banco
+                User user = loadUserFromDatabase(id);
                 cache.set("user:" + id, user, Duration.ofHours(1));
                 return user;
             });
@@ -90,81 +81,53 @@ public class UserService {
 }
 ```
 
-## 🐳 Docker Support
+| Method | Description |
+| --- | --- |
+| `set(key, value)` | Stores a value using `pg-cache.default-ttl` |
+| `set(key, value, ttl)` | Stores a value; `null` TTL means it never expires |
+| `get(key, type)` | Returns `Optional<T>`, empty if missing or expired |
+| `delete(key)` | Returns `true` if an entry was removed |
+| `cleanup()` | Removes expired entries, returns how many |
+| `getStats()` | Total / expired / active entries and average TTL |
 
-### Building the Docker Image
-
-```bash
-./gradlew jib
-```
-
-### Running with Docker
-
-```bash
-docker run -p 8080:8080 \
-  -e SPRING_DATASOURCE_URL=jdbc:postgresql://host.docker.internal:5432/db \
-  -e SPRING_DATASOURCE_USERNAME=user \
-  -e SPRING_DATASOURCE_PASSWORD=pass \
-  com.project/pg-cache:latest
-```
+Failures are thrown as `PgCacheException`.
 
 ## 🔥 PostgreSQL Table Structure
 
-PG Cache automatically creates the necessary cache table when the application starts:
+When `pg-cache.initialize-schema` is `true`, the table is created on startup (idempotently):
 
 ```sql
-CREATE UNLOGGED TABLE pg_cache (
-    key VARCHAR(255) PRIMARY KEY,
-    value JSONB NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+CREATE UNLOGGED TABLE IF NOT EXISTS "public"."pg_cache" (
+    key        VARCHAR(255) PRIMARY KEY,
+    value      JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP WITH TIME ZONE
 );
 
--- Indexes for better performance
-CREATE INDEX idx_pg_cache_expires_at ON pg_cache (expires_at);
-CREATE INDEX idx_pg_cache_created_at ON pg_cache (created_at);
-CREATE INDEX idx_pg_cache_value_gin ON pg_cache USING GIN (value);
+CREATE INDEX IF NOT EXISTS idx_pg_cache_expires_at ON pg_cache (expires_at);
+CREATE INDEX IF NOT EXISTS idx_pg_cache_created_at ON pg_cache (created_at);
+CREATE INDEX IF NOT EXISTS idx_pg_cache_value_gin ON pg_cache USING GIN (value);
 ```
 
-## 📈 Performance
-
-PG Cache is optimized for high performance:
-
-- **UNLOGGED PostgreSQL tables** for faster writes
-- **JSONB storage** for efficient JSON handling
-- **GIN indexes** for fast JSON queries
-- **Automatic cleanup** of expired entries
-- **Optimized autovacuum** settings
-- **PostgreSQL cache plans** for improved query performance
+> UNLOGGED tables are not crash-safe and are not replicated to standbys. That is usually fine for a cache;
+> set `use-unlogged-table: false` if you need otherwise.
 
 ## 🏗️ Development
 
-### Building the Project
+The build uses a Java 25 toolchain; Gradle downloads it automatically if it is not installed.
 
 ```bash
-./gradlew build
-```
-
-### Running Tests
-
-```bash
-./gradlew test
-```
-
-### Publishing to Maven Local
-
-```bash
+./gradlew build                 # compile, test and package
+./gradlew test                  # integration tests need Docker (Testcontainers); skipped otherwise
 ./gradlew publishToMavenLocal
 ```
 
-### Publishing to Maven Central
+## 🗺️ Roadmap
 
-```bash
-- [ ] Add support for distributed caching across multiple instances
-- [ ] Implement LRU eviction policy at the database level
-- [ ] Provide integration with Prometheus for monitoring
-- [ ] Support for custom serialization formats (e.g., ProtoBuf)
-- [ ] Add support for Redis-like commands (INCR, DECR, etc.)
+- [ ] Local in-memory (Caffeine) cache in front of PostgreSQL
+- [ ] Spring `CacheManager` integration (`@Cacheable`)
+- [ ] Prometheus / Micrometer metrics
+- [ ] Redis-like commands (INCR, DECR, etc.)
 
 ## 🤝 Contributing
 
@@ -172,15 +135,4 @@ We welcome contributions! Please open an issue or submit a pull request.
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🏗️ Related Projects
-
-- [Spring Cache](https://docs.spring.io/spring-framework/docs/current/reference/html/integration.html#cache)
-- [Caffeine](https://github.com/ben-manes/caffeine)
-- [pg_cron](https://github.com/citusdata/pg_cron)
-
-## 💬 Questions?
-
-For any questions or support, feel free to open an issue or reach out.
-```
+This project is licensed under the MIT License.
